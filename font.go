@@ -63,6 +63,10 @@ func (f *Font) UpdateResolution(windowWidth int, windowHeight int) {
 	gl.UseProgram(0)
 }
 
+func (f *Font) SetBatchMode(batchMode bool) {
+	f.batchMode = batchMode
+}
+
 // Printf draws a string to the screen, takes a list of arguments like printf
 func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, window [4]int32, fs string, argv ...interface{}) error {
 
@@ -75,27 +79,29 @@ func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, wind
 	// Buffer to store vertex data for multiple glyphs
 	var batchVertices []float32
 	var batchChars []*character
-	//setup blending mode
-	gl.Enable(gl.BLEND)
-	if blend {
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	if !f.batchMode {
+		//setup blending mode
+		gl.Enable(gl.BLEND)
+		if blend {
+			gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		}
+
+		//restrict drawing to a certain part of the window
+		gl.Enable(gl.SCISSOR_TEST)
+		gl.Scissor(window[0], window[1], window[2], window[3])
+
+		// Activate corresponding render state
+		gl.UseProgram(f.program)
+		//set text color
+		gl.Uniform4f(gl.GetUniformLocation(f.program, gl.Str("textColor\x00")), f.color.r, f.color.g, f.color.b, f.color.a)
+		//set screen resolution
+		//resUniform := gl.GetUniformLocation(f.program, gl.Str("resolution\x00"))
+		//gl.Uniform2f(resUniform, float32(2560), float32(1440))
+
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindVertexArray(f.vao)
 	}
-
-	//restrict drawing to a certain part of the window
-	gl.Enable(gl.SCISSOR_TEST)
-	gl.Scissor(window[0], window[1], window[2], window[3])
-
-	// Activate corresponding render state
-	gl.UseProgram(f.program)
-	//set text color
-	gl.Uniform4f(gl.GetUniformLocation(f.program, gl.Str("textColor\x00")), f.color.r, f.color.g, f.color.b, f.color.a)
-	//set screen resolution
-	//resUniform := gl.GetUniformLocation(f.program, gl.Str("resolution\x00"))
-	//gl.Uniform2f(resUniform, float32(2560), float32(1440))
-
-	gl.ActiveTexture(gl.TEXTURE0)
-	gl.BindVertexArray(f.vao)
-
 	//calculate alignment position
 	if align == 0 {
 		x -= f.Width(scale, fs, argv...) * 0.5
@@ -147,19 +153,69 @@ func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, wind
 		x += float32((ch.advance >> 6)) * scale // Bitshift by 6 to get value in pixels (2^6 = 64 (divide amount of 1/64th pixels by 64 to get amount of pixels))
 	}
 
-	// Render any remaining glyphs in the batch
-	if len(batchVertices) > 0 {
-		f.renderGlyphBatch(batchChars, indices, batchVertices)
+	if f.batchMode {
+		f.curFontBatch = append(f.curFontBatch, FontBatchData{batchChars, indices, batchVertices, blend, window})
+	} else {
+		// Render any remaining glyphs in the batch
+		if len(batchVertices) > 0 {
+			f.renderGlyphBatch(batchChars, indices, batchVertices)
+		}
+		//clear opengl textures and programs
+		gl.BindVertexArray(0)
+		gl.BindTexture(gl.TEXTURE_2D, 0)
+		gl.UseProgram(0)
+		gl.Disable(gl.BLEND)
+		gl.Disable(gl.SCISSOR_TEST)
+	}
+	return nil
+}
+
+type FontBatchData struct {
+	batchChars []*character
+	indices    []rune
+	vertices   []float32
+	blend      bool
+	window     [4]int32
+}
+
+func (f *Font) PrintBatch() bool {
+	if !f.batchMode {
+		return false
+	}
+	var batch FontBatchData
+	batch, f.curFontBatch = f.curFontBatch[0], f.curFontBatch[1:]
+
+	gl.Enable(gl.BLEND)
+	if batch.blend {
+		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 	}
 
-	//clear opengl textures and programs
+	//restrict drawing to a certain part of the window
+	gl.Enable(gl.SCISSOR_TEST)
+	gl.Scissor(batch.window[0], batch.window[1], batch.window[2], batch.window[3])
+
+	// Activate corresponding render state
+	gl.UseProgram(f.program)
+	//set text color
+	gl.Uniform4f(gl.GetUniformLocation(f.program, gl.Str("textColor\x00")), f.color.r, f.color.g, f.color.b, f.color.a)
+	//set screen resolution
+	//resUniform := gl.GetUniformLocation(f.program, gl.Str("resolution\x00"))
+	//gl.Uniform2f(resUniform, float32(2560), float32(1440))
+
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindVertexArray(f.vao)
+
+	f.renderGlyphBatch(batch.batchChars, batch.indices, batch.vertices)
 	gl.BindVertexArray(0)
 	gl.BindTexture(gl.TEXTURE_2D, 0)
 	gl.UseProgram(0)
 	gl.Disable(gl.BLEND)
 	gl.Disable(gl.SCISSOR_TEST)
-
-	return nil
+	if len(f.curFontBatch) > 0 {
+		return true
+	} else {
+		return false
+	}
 }
 
 // Helper function to render a batch of glyphs
