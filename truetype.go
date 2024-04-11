@@ -7,7 +7,8 @@ import (
 	"io"
 	"io/ioutil"
 
-	"github.com/go-gl/gl/v2.1/gl"
+	atlas "github.com/assemblaj/glh"
+	gl "github.com/go-gl/gl/v2.1/gl"
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
 	"golang.org/x/image/font"
@@ -24,17 +25,21 @@ type Font struct {
 	program      uint32
 	texture      uint32 // Holds the glyph texture id.
 	color        color
+	batches      map[BatchKey][]*FontBatchData
 	curFontBatch []FontBatchData
 	batchMode    bool
+	atlas        *atlas.TextureAtlas
 }
 
 type character struct {
-	textureID uint32 // ID handle of the glyph texture
-	width     int    //glyph width
-	height    int    //glyph height
-	advance   int    //glyph advance
-	bearingH  int    //glyph bearing horizontal
-	bearingV  int    //glyph bearing vertical
+	textureID                   uint32 // ID handle of the glyph texture
+	width                       int    //glyph width
+	height                      int    //glyph height
+	advance                     int    //glyph advance
+	bearingH                    int    //glyph bearing horizontal
+	bearingV                    int    //glyph bearing vertical
+	region                      atlas.AtlasRegion
+	uvX, uvY, uvWidth, uvHeight float32 // UV coordinates in texture space (0.0 to 1.0)
 }
 
 // GenerateGlyphs builds a set of textures based on a ttf files gylphs
@@ -52,7 +57,7 @@ func (f *Font) GenerateGlyphs(low, high rune) error {
 		DPI:     72,
 		Hinting: font.HintingFull,
 	})
-
+	f.atlas = atlas.NewTextureAtlas(512, 512, 4, gl.LINEAR)
 	//make each gylph
 	for ch := low; ch <= high; ch++ {
 		char := new(character)
@@ -108,23 +113,39 @@ func (f *Font) GenerateGlyphs(low, high rune) error {
 		if err != nil {
 			return err
 		}
+		// Allocate space in the atlas for the glyph
+		region, ok := f.atlas.Allocate(int(gw), int(gh))
+		if !ok {
+			return fmt.Errorf("failed to allocate space in the texture atlas")
+		}
+		// Set the glyph image in the allocated space
+		f.atlas.Set(region, rgba.Pix, rgba.Stride)
 
-		// Generate texture
-		var texture uint32
-		gl.GenTextures(1, &texture)
-		gl.BindTexture(gl.TEXTURE_2D, texture)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), 0,
-			gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(rgba.Pix))
+		// // Generate texture
+		// var texture uint32
+		// gl.GenTextures(1, &texture)
+		// gl.BindTexture(gl.TEXTURE_2D, texture)
+		// gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+		// gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+		// gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+		// gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+		// gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), 0,
+		// 	gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(rgba.Pix))
 
-		char.textureID = texture
+		// Update character struct to reference its position in the atlas
+		char.region = region // Assume character struct has a 'region' field
+		char.uvX = float32(region.X) / float32(f.atlas.Width())
+		char.uvY = float32(region.Y) / float32(f.atlas.Height())
+		char.uvWidth = float32(region.W) / float32(f.atlas.Width())
+		char.uvHeight = float32(region.H) / float32(f.atlas.Height())
+
+		//char.textureID = texture
 
 		//add char to fontChar list
 		f.fontChar[ch] = char
 	}
+	// Finalize the atlas
+	f.atlas.Commit(gl.TEXTURE_2D)
 
 	gl.BindTexture(gl.TEXTURE_2D, 0)
 	return nil
@@ -146,6 +167,7 @@ func LoadTrueTypeFont(program uint32, r io.Reader, scale int32, low, high rune, 
 	//make Font stuct type
 	f := new(Font)
 	f.fontChar = make(map[rune]*character)
+	f.batches = make(map[BatchKey][]*FontBatchData)
 	f.ttf = ttf
 	f.scale = scale
 	f.program = program            //set shader program

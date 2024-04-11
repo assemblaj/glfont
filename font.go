@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/go-gl/gl/v2.1/gl"
+	gl "github.com/go-gl/gl/v2.1/gl"
 )
 
 // Direction represents the direction in which strings should be rendered.
@@ -132,19 +132,47 @@ func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, wind
 		}
 
 		//calculate position and size for current rune
+		// xpos := x + float32(ch.bearingH)*scale
+		// ypos := y - float32(ch.height-ch.bearingV)*scale
+		// w := float32(ch.width) * scale
+		// h := float32(ch.height) * scale
+		// vertices := []float32{
+		// 	xpos + w, ypos, 1.0, 0.0,
+		// 	xpos, ypos, 0.0, 0.0,
+		// 	xpos, ypos + h, 0.0, 1.0,
+
+		// 	xpos, ypos + h, 0.0, 1.0,
+		// 	xpos + w, ypos + h, 1.0, 1.0,
+		// 	xpos + w, ypos, 1.0, 0.0,
+		// }
+		// Example for adjusting a single character's vertices with UV coordinates
 		xpos := x + float32(ch.bearingH)*scale
-		ypos := y - float32(ch.height-ch.bearingV)*scale
+		ypos := y - (float32(ch.height)-float32(ch.bearingV))*scale
 		w := float32(ch.width) * scale
 		h := float32(ch.height) * scale
-		vertices := []float32{
-			xpos + w, ypos, 1.0, 0.0,
-			xpos, ypos, 0.0, 0.0,
-			xpos, ypos + h, 0.0, 1.0,
 
-			xpos, ypos + h, 0.0, 1.0,
-			xpos + w, ypos + h, 1.0, 1.0,
-			xpos + w, ypos, 1.0, 0.0,
+		uvX := ch.uvX
+		uvY := ch.uvY
+		uvWidth := ch.uvWidth
+		uvHeight := ch.uvHeight
+
+		// Calculate actual UV coordinates
+		uvLeft := uvX
+		uvTop := uvY
+		uvRight := uvX + uvWidth
+		uvBottom := uvY + uvHeight
+
+		vertices := []float32{
+			// First Triangle
+			xpos, ypos, uvLeft, uvTop, // Top-Left
+			xpos + w, ypos, uvRight, uvTop, // Top-Right
+			xpos, ypos + h, uvLeft, uvBottom, // Bottom-Left
+			// Second Triangle
+			xpos, ypos + h, uvLeft, uvBottom, // Bottom-Left (Repeated)
+			xpos + w, ypos, uvRight, uvTop, // Top-Right (Repeated)
+			xpos + w, ypos + h, uvRight, uvBottom, // Bottom-Right
 		}
+
 		// Append glyph vertices to the batch buffer
 		batchVertices = append(batchVertices, vertices...)
 		batchChars = append(batchChars, ch)
@@ -154,11 +182,15 @@ func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, wind
 	}
 
 	if f.batchMode {
-		f.curFontBatch = append(f.curFontBatch, FontBatchData{batchChars, indices, batchVertices, blend, window})
+		batchKey := BatchKey{blend, window}
+		if _, ok := f.batches[batchKey]; !ok {
+			f.batches[batchKey] = make([]*FontBatchData, 0)
+		}
+		f.batches[batchKey] = append(f.batches[batchKey], &FontBatchData{batchChars, indices, batchVertices, blend, window})
 	} else {
 		// Render any remaining glyphs in the batch
 		if len(batchVertices) > 0 {
-			f.renderGlyphBatch(batchChars, indices, batchVertices)
+			f.renderGlyphBatch(batchVertices) // , indices, batchVertices)
 		}
 		//clear opengl textures and programs
 		gl.BindVertexArray(0)
@@ -170,6 +202,10 @@ func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, wind
 	return nil
 }
 
+type BatchKey struct {
+	blend  bool
+	window [4]int32
+}
 type FontBatchData struct {
 	batchChars []*character
 	indices    []rune
@@ -182,63 +218,74 @@ func (f *Font) PrintBatch() bool {
 	if !f.batchMode {
 		return false
 	}
-	var batch FontBatchData
-	batch, f.curFontBatch = f.curFontBatch[0], f.curFontBatch[1:]
 
-	gl.Enable(gl.BLEND)
-	if batch.blend {
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	for batchKey, batch := range f.batches {
+		vertices := make([]float32, 0)
+		for i := 0; i < len(batch); i++ {
+			vertices = append(vertices, batch[i].vertices...)
+		}
+		gl.Enable(gl.BLEND)
+		if batchKey.blend {
+			gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		}
+
+		//restrict drawing to a certain part of the window
+		gl.Enable(gl.SCISSOR_TEST)
+		gl.Scissor(batchKey.window[0], batchKey.window[1], batchKey.window[2], batchKey.window[3])
+
+		// Activate corresponding render state
+		gl.UseProgram(f.program)
+		//set text color
+		gl.Uniform4f(gl.GetUniformLocation(f.program, gl.Str("textColor\x00")), f.color.r, f.color.g, f.color.b, f.color.a)
+		//set screen resolution
+		//resUniform := gl.GetUniformLocation(f.program, gl.Str("resolution\x00"))
+		//gl.Uniform2f(resUniform, float32(2560), float32(1440))
+
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindVertexArray(f.vao)
+
+		f.renderGlyphBatch(vertices) //batch.batchChars, batch.indices, batch.vertices)
+		gl.BindVertexArray(0)
+		gl.BindTexture(gl.TEXTURE_2D, 0)
+		gl.UseProgram(0)
+		gl.Disable(gl.BLEND)
+		gl.Disable(gl.SCISSOR_TEST)
 	}
-
-	//restrict drawing to a certain part of the window
-	gl.Enable(gl.SCISSOR_TEST)
-	gl.Scissor(batch.window[0], batch.window[1], batch.window[2], batch.window[3])
-
-	// Activate corresponding render state
-	gl.UseProgram(f.program)
-	//set text color
-	gl.Uniform4f(gl.GetUniformLocation(f.program, gl.Str("textColor\x00")), f.color.r, f.color.g, f.color.b, f.color.a)
-	//set screen resolution
-	//resUniform := gl.GetUniformLocation(f.program, gl.Str("resolution\x00"))
-	//gl.Uniform2f(resUniform, float32(2560), float32(1440))
-
-	gl.ActiveTexture(gl.TEXTURE0)
-	gl.BindVertexArray(f.vao)
-
-	f.renderGlyphBatch(batch.batchChars, batch.indices, batch.vertices)
-	gl.BindVertexArray(0)
-	gl.BindTexture(gl.TEXTURE_2D, 0)
-	gl.UseProgram(0)
-	gl.Disable(gl.BLEND)
-	gl.Disable(gl.SCISSOR_TEST)
-	if len(f.curFontBatch) > 0 {
-		return true
-	} else {
-		return false
+	for i := range f.batches {
+		delete(f.batches, i)
 	}
+	return true
 }
 
-// Helper function to render a batch of glyphs
-func (f *Font) renderGlyphBatch(batchChars []*character, indices []rune, vertices []float32) {
+func (f *Font) renderGlyphBatch(vertices []float32) {
+	// Bind the texture atlas
+	gl.ActiveTexture(gl.TEXTURE0) // Ensure TEXTURE0 is active if using multiple textures
+	f.atlas.Bind(gl.TEXTURE_2D)   // Bind the texture atlas
+
 	// Bind the buffer and update its data
 	gl.BindBuffer(gl.ARRAY_BUFFER, f.vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.DYNAMIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
 
-	// Iterate over each glyph in the batch
-	for i := 0; i < len(vertices)/24; i++ {
-		// Determine the texture ID for the current glyph
-		textureID := batchChars[i].textureID
+	// Specify how OpenGL should interpret the vertex data
+	// Position
+	vertAttrib := uint32(gl.GetAttribLocation(f.program, gl.Str("vert\x00")))
+	gl.EnableVertexAttribArray(vertAttrib)
+	gl.VertexAttribPointer(vertAttrib, 2, gl.FLOAT, false, 4*4, gl.PtrOffset(0))
+	defer gl.DisableVertexAttribArray(vertAttrib)
 
-		// Bind the texture
-		gl.BindTexture(gl.TEXTURE_2D, textureID)
+	texCoordAttrib := uint32(gl.GetAttribLocation(f.program, gl.Str("vertTexCoord\x00")))
+	gl.EnableVertexAttribArray(texCoordAttrib)
+	gl.VertexAttribPointer(texCoordAttrib, 2, gl.FLOAT, false, 4*4, gl.PtrOffset(2*4))
+	defer gl.DisableVertexAttribArray(texCoordAttrib)
 
-		// Render the current glyph
-		gl.DrawArrays(gl.TRIANGLES, int32(i*6), 6)
-	}
+	// Draw all glyphs in a single draw call
+	gl.DrawArrays(gl.TRIANGLES, 0, int32(len(vertices)/4)) // Each vertex has 4 floats
 
-	// Unbind the buffer and texture
+	// Cleanup
+	gl.DisableVertexAttribArray(0)
+	gl.DisableVertexAttribArray(1)
 	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
-	gl.BindTexture(gl.TEXTURE_2D, 0)
+	gl.BindTexture(gl.TEXTURE_2D, 0) // Unbind the texture atlas if necessary
 }
 
 // Width returns the width of a piece of text in pixels
