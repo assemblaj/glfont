@@ -229,6 +229,10 @@ func (f *Font) Width(scale float32, fs string, argv ...interface{}) float32 {
 }
 
 // Stub
-func (f *Font) PrintBatch() {
+func (f *Font) PrintBatch() bool {
+	return false
+}
+
+func (f *Font) SetBatchMode(batchMode bool) {
 
 }
