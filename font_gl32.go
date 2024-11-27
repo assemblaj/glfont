@@ -184,11 +184,11 @@ func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, wind
 	}
 
 	if f.batchMode {
-		batchKey := BatchKey{blend, window}
+		batchKey := BatchKey{blend, window, f.color}
 		if _, ok := f.batches[batchKey]; !ok {
 			f.batches[batchKey] = make([]*FontBatchData, 0)
 		}
-		f.batches[batchKey] = append(f.batches[batchKey], &FontBatchData{batchChars, indices, batchVertices, blend, window})
+		f.batches[batchKey] = append(f.batches[batchKey], &FontBatchData{batchChars, indices, batchVertices, blend, window, f.color})
 	} else {
 		// Render any remaining glyphs in the batch
 		if len(batchVertices) > 0 {
@@ -207,6 +207,7 @@ func (f *Font) Printf(x, y float32, scale float32, align int32, blend bool, wind
 type BatchKey struct {
 	blend  bool
 	window [4]int32
+	color  color
 }
 type FontBatchData struct {
 	batchChars []*character
@@ -214,6 +215,7 @@ type FontBatchData struct {
 	vertices   []float32
 	blend      bool
 	window     [4]int32
+	color      color
 }
 
 func (f *Font) PrintBatch() bool {
@@ -238,7 +240,7 @@ func (f *Font) PrintBatch() bool {
 		// Activate corresponding render state
 		gl.UseProgram(f.program)
 		//set text color
-		gl.Uniform4f(gl.GetUniformLocation(f.program, gl.Str("textColor\x00")), f.color.r, f.color.g, f.color.b, f.color.a)
+		gl.Uniform4f(gl.GetUniformLocation(f.program, gl.Str("textColor\x00")), batchKey.color.r, batchKey.color.g, batchKey.color.b, batchKey.color.a)
 		//set screen resolution
 		//resUniform := gl.GetUniformLocation(f.program, gl.Str("resolution\x00"))
 		//gl.Uniform2f(resUniform, float32(2560), float32(1440))
