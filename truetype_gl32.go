@@ -59,7 +59,9 @@ func (f *Font) GenerateGlyphs(low, high rune) error {
 		DPI:     72,
 		Hinting: font.HintingFull,
 	})
-	f.atlas = atlas.NewTextureAtlas(512, 512, 4, gl.LINEAR)
+	if f.atlas == nil {
+		f.atlas = atlas.NewTextureAtlas(512, 512, 4, gl.LINEAR)
+	}
 	//make each gylph
 	for ch := low; ch <= high; ch++ {
 		char := new(character)

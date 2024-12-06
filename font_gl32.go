@@ -47,7 +47,7 @@ func LoadFont(file string, scale int32, windowWidth int, windowHeight int, GLSLV
 	resUniform := gl.GetUniformLocation(program, gl.Str("resolution\x00"))
 	gl.Uniform2f(resUniform, float32(windowWidth), float32(windowHeight))
 
-	return LoadTrueTypeFont(program, fd, scale, 32, 127, LeftToRight)
+	return LoadTrueTypeFont(program, fd, scale, 0, 512, LeftToRight)
 }
 
 // SetColor allows you to set the text color to be used when you draw the text
@@ -268,7 +268,7 @@ func (f *Font) renderGlyphBatch(vertices []float32) {
 
 	// Bind the buffer and update its data
 	gl.BindBuffer(gl.ARRAY_BUFFER, f.vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.DYNAMIC_DRAW)
 
 	// Specify how OpenGL should interpret the vertex data
 	// Position
